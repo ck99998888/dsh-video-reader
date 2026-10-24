@@ -21,6 +21,12 @@ git clone https://github.com/ck99998888/dsh-video-reader $env:USERPROFILE\dsh-vi
 pwsh -File $env:USERPROFILE\dsh-video-reader\scripts\setup.ps1   # optional; -Mirror if GitHub is slow
 ```
 
+Or install it as a DSH bundle from the repository:
+
+```powershell
+dsh plugin --profile web add github:ck99998888/dsh-video-reader
+```
+
 Then install the folder as a bundle in DSH (Plugin Manager → install from folder, or
 `plugin_manager install_bundle` with that path) and restart DSH once: the Client half
 of a bundle is composed at page boot.
