@@ -16,7 +16,7 @@ A DeepSeek Harness plugin that lets the agent **watch, listen to, and look at** 
 **Install**
 
 ```powershell
-git clone <this repo> $env:USERPROFILE\dsh-video-reader
+git clone https://github.com/ck99998888/dsh-video-reader $env:USERPROFILE\dsh-video-reader
 pwsh -File $env:USERPROFILE\dsh-video-reader\scripts\setup.ps1   # -Mirror if GitHub is slow
 ```
 
