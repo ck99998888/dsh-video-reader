@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Video Reader">
+  <defs>
+    <linearGradient id="vr-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f2a44"/>
+      <stop offset="1" stop-color="#0d1421"/>
+    </linearGradient>
+    <linearGradient id="vr-lens" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#vr-bg)"/>
+  <rect x="10" y="17" width="44" height="30" rx="6" fill="none" stroke="#7dd3fc" stroke-width="2.5"/>
+  <path d="M20 12v10M32 12v10M44 12v10M20 42v10M32 42v10M44 42v10" stroke="#7dd3fc" stroke-width="2.5" stroke-linecap="round" opacity="0.55"/>
+  <ellipse cx="32" cy="32" rx="13" ry="8" fill="none" stroke="url(#vr-lens)" stroke-width="2.5"/>
+  <circle cx="32" cy="32" r="4.2" fill="url(#vr-lens)"/>
+  <circle cx="30.6" cy="30.6" r="1.3" fill="#0d1421"/>
+</svg>

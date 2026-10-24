@@ -1,0 +1,4 @@
+- insert:
+    - id: video-reader
+      name: '@local/dsh-video-reader'
+      config: {}

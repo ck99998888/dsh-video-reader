@@ -1,0 +1,14 @@
+# Binaries and models are fetched by scripts/setup.ps1 — never committed.
+# GitHub rejects any single file above 100 MB, and ffmpeg alone is ~100 MB.
+tools/
+models/
+
+# Runtime caches produced by the plugin
+.dsh-video-cache/
+*.log
+
+# Node
+node_modules/
+
+# Test fixtures are generated locally (see test/*.mjs)
+test/fixtures/
