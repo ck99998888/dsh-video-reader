@@ -4,6 +4,24 @@
   "private": true,
   "type": "module",
   "description": "Watch video and audio files, and look at the live desktop: visible stills, contact sheets, subtitles, multilingual speaker-labelled transcripts, screen capture, and automatic dependency setup — all local.",
+  "author": "ck99998888",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ck99998888/dsh-video-reader.git"
+  },
+  "homepage": "https://github.com/ck99998888/dsh-video-reader#readme",
+  "bugs": {
+    "url": "https://github.com/ck99998888/dsh-video-reader/issues"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "video",
+    "transcription",
+    "whisper",
+    "screen-capture"
+  ],
   "icon": "./icon.svg",
   "exports": {
     ".": "./index.js",
