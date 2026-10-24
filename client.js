@@ -63,6 +63,19 @@ window.__ModuleLoader__.load({
         watchStart: '开始监控',
         watchStop: '停止监控',
         watchIdle: '当前没有监控。',
+        depsTitle: '依赖组件',
+        depsHint: 'ffmpeg、whisper.cpp 与说话人分离运行时/模型不随仓库分发（超过 GitHub 单文件限制）。首次需要时自动下载到 %LOCALAPPDATA%\\dsh-video-reader，每个文件都按 sha256 校验。',
+        depsCheck: '检查状态',
+        depsInstall: '安装缺失依赖',
+        depsInstalling: '正在安装…',
+        depsAuto: '自动安装缺失依赖',
+        depsAutoModels: '自动下载语音/分离模型（约 547 MB）',
+        depsMirror: 'GitHub 下载走 gh-proxy 镜像',
+        depsReady: '就绪',
+        depsMissing: '缺失',
+        depsTotal: '完整安装约',
+        depsFailed: '安装失败',
+        depsDownloading: '正在下载',
       },
       en: {
         nav: 'Video Reader',
@@ -112,6 +125,19 @@ window.__ModuleLoader__.load({
         watchStart: 'Start watching',
         watchStop: 'Stop watching',
         watchIdle: 'Nothing is being watched.',
+        depsTitle: 'Dependencies',
+        depsHint: 'ffmpeg, whisper.cpp and the diarization runtime/models are not shipped in the repository (beyond GitHub\'s per-file limit). They download on first use into %LOCALAPPDATA%\\dsh-video-reader, every file checked by sha256.',
+        depsCheck: 'Check status',
+        depsInstall: 'Install missing',
+        depsInstalling: 'Installing…',
+        depsAuto: 'Install missing dependencies automatically',
+        depsAutoModels: 'Also fetch speech/diarization models (about 547 MB)',
+        depsMirror: 'Use the gh-proxy mirror for GitHub downloads',
+        depsReady: 'ready',
+        depsMissing: 'missing',
+        depsTotal: 'Full install is about',
+        depsFailed: 'Install failed',
+        depsDownloading: 'Downloading',
       },
     }
 
@@ -204,6 +230,9 @@ window.__ModuleLoader__.load({
       watchIntervalMs: 2000,
       watchThreshold: 0.02,
       watchMinutes: 30,
+      autoSetup: true,
+      autoSetupModels: true,
+      dependencyMirror: true,
     }
 
     /** A render failure must show up as text, not as an empty settings page. */
@@ -255,6 +284,8 @@ window.__ModuleLoader__.load({
         const [recordBusy, setRecordBusy] = useState(false)
         const [watchers, setWatchers] = useState([])
         const [watchBusy, setWatchBusy] = useState(false)
+        const [deps, setDeps] = useState(null)
+        const [depsBusy, setDepsBusy] = useState(false)
         const previewUrl = useRef('')
 
         // Language is resolved from the browser first: touching the Cordis
@@ -291,6 +322,42 @@ window.__ModuleLoader__.load({
         }
 
         useEffect(() => { load() }, [])
+
+        const loadDeps = () => {
+          fetch(`${API}/deps/status`, { cache: 'no-store' })
+            .then((response) => {
+              if (!response.ok) throw new Error(`HTTP ${response.status}`)
+              return response.json()
+            })
+            .then((value) => setDeps(value))
+            .catch(() => { /* the dependency card keeps its last known state */ })
+        }
+
+        const startDepsInstall = async () => {
+          setDepsBusy(true)
+          setError('')
+          try {
+            const response = await fetch(`${API}/deps/install`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({}),
+            })
+            const body = await response.json().catch(() => ({}))
+            if (!response.ok) throw new Error(body?.error ?? `HTTP ${response.status}`)
+            loadDeps()
+          } catch (failure) {
+            setError(`${t('depsFailed')}: ${failure?.message ?? failure}`)
+          } finally {
+            setDepsBusy(false)
+          }
+        }
+
+        useEffect(() => { loadDeps() }, [])
+        useEffect(() => {
+          if (!deps?.install?.running) return undefined
+          const timer = setInterval(loadDeps, 1500)
+          return () => clearInterval(timer)
+        }, [deps?.install?.running])
 
         useEffect(() => () => {
           if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
@@ -462,6 +529,77 @@ window.__ModuleLoader__.load({
               h('button', { style: S.button, onClick: load }, t('retry')),
             )
             : null,
+
+          h('div', { style: S.card },
+            h('h3', { style: { margin: 0, fontSize: '13px', fontWeight: 600 } }, t('depsTitle')),
+            h('p', { style: S.hint }, t('depsHint')),
+            deps
+              ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+                ...deps.components.map((entry) => h('div', { key: entry.id, style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 } },
+                  h('span', {
+                    style: {
+                      width: '8px', height: '8px', borderRadius: '50%', flex: '0 0 auto',
+                      background: entry.ready ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-warning-primary)',
+                    },
+                  }),
+                  h('span', { style: { fontWeight: 500, minWidth: '190px' } }, (zh ? entry.label?.zh : entry.label?.en) ?? entry.id),
+                  h('span', { style: { ...S.status, minWidth: '42px' } }, entry.ready ? t('depsReady') : t('depsMissing')),
+                  entry.ready && entry.location
+                    ? h('span', {
+                      style: { ...S.hint, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '300px' },
+                      title: entry.location,
+                    }, entry.location)
+                    : null,
+                )),
+                h('p', { style: S.hint }, `${t('depsTotal')} ${Math.round((deps.installedBytes ?? 0) / 1048576)} MB · ${deps.root}`),
+              )
+              : h('p', { style: S.hint }, t('loading')),
+            deps?.install?.running
+              ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+                h('p', { style: S.status }, `${t('depsInstalling')} ${deps.install.component ?? ''} · ${deps.install.phase ?? ''}${deps.install.file ? ` · ${deps.install.file}` : ''}`),
+                h('progress', {
+                  value: deps.install.total ? deps.install.received / deps.install.total : 0,
+                  max: 1,
+                  style: { width: '100%', height: '8px' },
+                }),
+                h('p', { style: S.hint }, `${((deps.install.received ?? 0) / 1048576).toFixed(1)} / ${((deps.install.total ?? 0) / 1048576).toFixed(1)} MB`),
+              )
+              : null,
+            deps?.install?.error ? h('p', { style: S.error }, deps.install.error) : null,
+            h('div', { style: S.row },
+              h('button', { style: S.button, onClick: loadDeps, disabled: depsBusy }, t('depsCheck')),
+              h('button', {
+                style: S.primary,
+                onClick: startDepsInstall,
+                disabled: depsBusy || deps?.install?.running === true || deps?.ready === true,
+              }, deps?.install?.running ? t('depsInstalling') : t('depsInstall')),
+            ),
+            h('div', { style: S.row },
+              h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' } },
+                h('input', {
+                  type: 'checkbox', checked: draft.autoSetup !== false,
+                  onChange: (event) => patch({ autoSetup: event.target.checked }),
+                }),
+                h('span', null, t('depsAuto')),
+              ),
+              h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' } },
+                h('input', {
+                  type: 'checkbox', checked: draft.autoSetupModels !== false,
+                  onChange: (event) => patch({ autoSetupModels: event.target.checked }),
+                }),
+                h('span', null, t('depsAutoModels')),
+              ),
+            ),
+            h('div', { style: S.row },
+              h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' } },
+                h('input', {
+                  type: 'checkbox', checked: draft.dependencyMirror !== false,
+                  onChange: (event) => patch({ dependencyMirror: event.target.checked }),
+                }),
+                h('span', null, t('depsMirror')),
+              ),
+            ),
+          ),
 
           h('div', { style: S.card },
             h('div', { style: S.row },

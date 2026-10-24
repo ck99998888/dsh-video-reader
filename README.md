@@ -10,6 +10,7 @@ A DeepSeek Harness plugin that lets the agent **watch, listen to, and look at** 
 - `screen_frames_read` — continue reading a capture until nothing is unread
 - `screen_watch` — sample continuously, wake the agent only when the picture changes
 - `screen_record` — long captures as video (1 h at 30 fps ≈ 350 MB)
+- `video_reader_setup` — check or install the external toolchain (auto-installed on first use)
 
 ## English
 
@@ -17,20 +18,26 @@ A DeepSeek Harness plugin that lets the agent **watch, listen to, and look at** 
 
 ```powershell
 git clone https://github.com/ck99998888/dsh-video-reader $env:USERPROFILE\dsh-video-reader
-pwsh -File $env:USERPROFILE\dsh-video-reader\scripts\setup.ps1   # -Mirror if GitHub is slow
+pwsh -File $env:USERPROFILE\dsh-video-reader\scripts\setup.ps1   # optional; -Mirror if GitHub is slow
 ```
 
 Then install the folder as a bundle in DSH (Plugin Manager → install from folder, or
 `plugin_manager install_bundle` with that path) and restart DSH once: the Client half
 of a bundle is composed at page boot.
 
-**Binaries and models are not in this repository.** `scripts/setup.ps1` downloads them:
+**Dependencies are installed automatically.** The first `video_read`/`video_frames`/`screen_capture`
+call downloads whatever is missing (ffmpeg first) into `%LOCALAPPDATA%\dsh-video-reader\bin`
+and `…\models`, then retries the call. Every download is pinned by version and verified
+by sha256 against the manifest in `lib/deps.js`; a mismatching file is deleted, never
+installed. `scripts/setup.ps1` is now only a way to pre-seed everything up front.
+Control the behaviour with the plugin Config (`autoSetup`, `autoSetupModels`,
+`dependencyMirror`) or from Settings → Video Reader → Dependencies.
 
 | Piece | Size | Why not committed |
 |---|---|---|
-| ffmpeg + ffprobe (essentials build) | ~200 MB | per-file GitHub limit is 100 MB |
-| whisper.cpp CLI + DLLs | ~10 MB | fetched with the rest |
-| sherpa-onnx diarization runtime | ~17 MB | fetched with the rest |
+| ffmpeg + ffprobe (essentials 9.0.2) | ~200 MB | per-file GitHub limit is 100 MB |
+| whisper.cpp CLI + DLLs (b5454) | ~10 MB | fetched with the rest |
+| sherpa-onnx diarization runtime (v2.0.0) | ~17 MB | fetched with the rest |
 | `ggml-medium-q5_0.bin` speech model | 514 MB | far above the limit |
 | pyannote segmentation + 3D-Speaker embedding | ~33 MB | fetched with the rest |
 
@@ -51,9 +58,29 @@ of a bundle is composed at page boot.
 
 让智能体真正“看”和“听”视频：一次调用即可拿到容器与流信息、可直观看清的关键帧拼版、逐帧大图路径、内嵌或同名字幕，以及**带说话人标签的多语种转写**（S1/S2/… 谁在第几秒说了什么）。
 
-全部在本机处理：视频不上传、不联网、不依赖云服务。插件 = Harness Host 插件 + ffmpeg / whisper.cpp / sherpa-onnx 与模型（由 `scripts/setup.ps1` 下载，不入库）。
+全部在本机处理：视频不上传、不联网、不依赖云服务。插件 = Harness Host 插件 + ffmpeg / whisper.cpp / sherpa-onnx 与模型（由插件自动下载，不入库）。
+
+### 依赖：首次使用自动补齐（1.8 起）
+
+`tools/`、`models/` 不入库，插件会自己补齐：
+
+- 首次需要时（`video_read` / `video_frames` / `screen_capture`）自动把缺的组件下到 `%LOCALAPPDATA%\dsh-video-reader\{bin,models}`，装好再继续本次调用；
+- 每个文件都按 `lib/deps.js` 里钉死的版本与 sha256 校验，校验失败的文件直接丢弃、不会安装；
+- GitHub 域名不可达时默认走 `gh-proxy.com` 镜像（`dependencyMirror`）；
+- 设置页「依赖组件」可看状态、手动安装、关掉自动安装；
+- 也可以用工具 `video_reader_setup` 显式检查/安装，或提前跑 `scripts/setup.ps1`。
 
 ## 工具
+
+### `video_reader_setup`
+
+| 参数 | 说明 |
+|---|---|
+| `action` | `status`（只读报告）或 `install`（下载缺失组件） |
+| `components` | `ffmpeg` `whisper` `whisper-model` `sherpa` `diarization-models`，或简写 `models` / `binaries` / `all`（默认） |
+| `mirror` | GitHub 下载是否优先走 gh-proxy 镜像；默认取设置页 |
+
+返回每一项的就绪状态、安装位置、版本，以及安装耗时/体积。视频类工具在缺依赖时会先自动安装再继续，所以这个工具主要用于提前体检或重试失败的下载。
 
 ### `video_read`
 
@@ -170,6 +197,10 @@ Web UI 里 **设置 → 视频阅读器** 提供图形化配置：允许/禁止�
         diarize: true
         speakers: 0              # 0 = 自动
         diarizationThreshold: 0.5
+        # 依赖自动安装（1.8 起）
+        autoSetup: true          # 首次使用时自动下载缺失的 ffmpeg / 运行时
+        autoSetupModels: true    # 连语音与分离模型（~547 MB）也自动下载
+        dependencyMirror: true   # GitHub 域名不通时走 gh-proxy.com 镜像
         # 路径覆盖（留空则用随包二进制）
         ffmpegPath: ''
         ffprobePath: ''

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Video Reader",
-    "description": "Lets the agent watch, listen, and look: read video and audio files (visible stills and contact sheets, subtitles, multilingual speaker-labelled transcripts) and capture the live desktop (whole screen, one window, or a rectangle) with its own settings page."
+    "description": "Lets the agent watch, listen, and look: read video and audio files (visible stills and contact sheets, subtitles, multilingual speaker-labelled transcripts) and capture the live desktop (whole screen, one window, or a rectangle). Ships as source only and installs its ffmpeg/whisper.cpp/sherpa-onnx toolchain automatically, verified by sha256."
   }
 }

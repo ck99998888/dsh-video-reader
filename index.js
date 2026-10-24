@@ -11,7 +11,7 @@
  */
 import path from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { findBinary, describeToolchain } from './lib/ffmpeg.js'
+import { findBinary, describeToolchain, run } from './lib/ffmpeg.js'
 import * as media from './lib/video.js'
 import { resolveRecognizer, transcribeWav } from './lib/asr.js'
 import { resolveDiarizer, diarize, assignSpeakers, mergeTurns } from './lib/diarize.js'
@@ -20,6 +20,14 @@ import { captureInput, planCapture, captureStill, captureSequence } from './lib/
 import { listWindows } from './lib/windows.js'
 import { startRecording, stopRecording, listRecordings, stopAll } from './lib/record.js'
 import { startWatcher, stopWatcher, listWatchers, stopAllWatchers } from './lib/watch.js'
+import {
+  COMPONENT_IDS,
+  dependencyStatus,
+  ensureComponents,
+  expandComponents,
+  install as installDependencies,
+  installState,
+} from './lib/deps.js'
 
 export const inject = ['tools']
 
@@ -50,6 +58,9 @@ function normalizeSettings(config = {}) {
     diarizationPath: config.diarizationPath || undefined,
     segmentationModel: config.segmentationModel || undefined,
     embeddingModel: config.embeddingModel || undefined,
+    autoSetup: config.autoSetup !== false,
+    autoSetupModels: config.autoSetupModels !== false,
+    dependencyMirror: config.dependencyMirror !== false,
   }
 }
 
@@ -89,10 +100,74 @@ async function workingDirectory(ctx, exec) {
 }
 
 /** Resolve both binaries and fail with the actionable setup message. */
-async function toolchain(settings) {
-  const ffmpeg = await findBinary('ffmpeg', settings.ffmpegPath)
-  const ffprobe = await findBinary('ffprobe', settings.ffprobePath)
+async function toolchain(settings, notes = []) {
+  let ffmpeg = await findBinary('ffmpeg', settings.ffmpegPath)
+  let ffprobe = await findBinary('ffprobe', settings.ffprobePath)
+  const usable = async (binary) => (path.isAbsolute(binary) ? true : probeCommand(binary))
+  if (!(await usable(ffmpeg)) || !(await usable(ffprobe))) {
+    const prefs = await dependencyPrefs(settings)
+    if (prefs.autoSetup) {
+      await autoInstall(notes, ['ffmpeg'], prefs)
+      ffmpeg = await findBinary('ffmpeg', settings.ffmpegPath)
+      ffprobe = await findBinary('ffprobe', settings.ffprobePath)
+    }
+  }
   return { ffmpeg, ffprobe }
+}
+
+/** Does this bare command resolve and run? Used before spending a download. */
+async function probeCommand(command) {
+  try {
+    const result = await run(command, ['-version'], { timeoutMs: 15_000 })
+    return result.code === 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The dependency switches live in the same settings file as the capture
+ * preferences, so the settings page can flip them without a restart; the plugin
+ * Config can turn automation off for everyone too.
+ */
+async function dependencyPrefs(settings) {
+  const stored = await readSettings()
+  return {
+    autoSetup: stored.autoSetup !== false && settings.autoSetup !== false,
+    autoSetupModels: stored.autoSetupModels !== false && settings.autoSetupModels !== false,
+    mirror: stored.dependencyMirror !== false && settings.dependencyMirror !== false,
+  }
+}
+
+/** Install missing components and describe what happened in the tool's notes. */
+async function autoInstall(notes, ids, prefs, signal) {
+  if (!prefs.autoSetup) return false
+  try {
+    const result = await ensureComponents(ids, { mirror: prefs.mirror, signal })
+    if (result.installed.length > 0) {
+      const mb = Math.round((result.bytes ?? 0) / 1048576)
+      const seconds = Math.round((result.durationMs ?? 0) / 1000)
+      notes.push(`installed missing dependencies automatically: ${result.installed.join(', ')} (${mb} MB, ${seconds}s). Set autoSetup:false to disable.`)
+    }
+    return result.installed.length > 0
+  } catch (error) {
+    notes.push(`automatic dependency install failed: ${error?.message ?? error}. Call video_reader_setup with action:"install" to retry.`)
+    return false
+  }
+}
+
+/** Resolve ffmpeg, installing it automatically when that is allowed and needed. */
+async function ensureFfmpeg(settings, notes = [], signal) {
+  let ffmpeg = await findBinary('ffmpeg', settings.ffmpegPath)
+  const usable = path.isAbsolute(ffmpeg) ? true : await probeCommand(ffmpeg)
+  if (!usable) {
+    const prefs = await dependencyPrefs(settings)
+    if (prefs.autoSetup) {
+      await autoInstall(notes, ['ffmpeg'], prefs, signal)
+      ffmpeg = await findBinary('ffmpeg', settings.ffmpegPath)
+    }
+  }
+  return ffmpeg
 }
 
 function missingBinaryError(name, error) {
@@ -235,8 +310,7 @@ export function apply(ctx, rawConfig = {}) {
     } catch (error) {
       throw new Error(error.message)
     }
-    const { ffmpeg, ffprobe } = await toolchain(settings)
-
+    const { ffmpeg, ffprobe } = await toolchain(settings, notes)
     let probed
     try {
       probed = await media.probe(ffprobe, fileInfo.path, signal)
@@ -326,7 +400,16 @@ export function apply(ctx, rawConfig = {}) {
     // ---- transcript -------------------------------------------------------
     let transcript
     if (args.transcript !== false && info.hasAudio) {
-      const recognizer = await resolveRecognizer(settings)
+      let recognizer = await resolveRecognizer(settings)
+      const withinTranscriptBudget = info.durationSeconds <= settings.maxTranscriptSeconds
+        || start !== undefined || end !== undefined
+      if (!recognizer.ready && withinTranscriptBudget) {
+        const prefs = await dependencyPrefs(settings)
+        if (prefs.autoSetup && prefs.autoSetupModels) {
+          await autoInstall(notes, ['whisper', 'whisper-model'], prefs, signal)
+          recognizer = await resolveRecognizer(settings)
+        }
+      }
       if (!recognizer.ready) {
         transcript = { status: 'unavailable', reason: recognizer.hint }
         notes.push('speech recognition is not installed; subtitles and frames still apply')
@@ -347,7 +430,14 @@ export function apply(ctx, rawConfig = {}) {
           let talk = {}
           const wantDiarization = args.diarize !== false && settings.diarize
           if (wantDiarization && heard.cues.length > 0) {
-            const diarizer = await resolveDiarizer(settings)
+            let diarizer = await resolveDiarizer(settings)
+            if (!diarizer.ready) {
+              const prefs = await dependencyPrefs(settings)
+              if (prefs.autoSetup && prefs.autoSetupModels) {
+                await autoInstall(notes, ['sherpa', 'diarization-models'], prefs, signal)
+                diarizer = await resolveDiarizer(settings)
+              }
+            }
             if (diarizer.ready) {
               try {
                 const segments = await diarize(diarizer, wavPath, {
@@ -438,9 +528,10 @@ export function apply(ctx, rawConfig = {}) {
 
   async function videoFrames(args, exec) {
     const signal = exec.signal
+    const notes = []
     const cwd = await workingDirectory(ctx, exec)
     const fileInfo = await media.resolveFile(args.path, cwd)
-    const { ffmpeg, ffprobe } = await toolchain(settings)
+    const { ffmpeg, ffprobe } = await toolchain(settings, notes)
     const probed = await media.probe(ffprobe, fileInfo.path, signal)
     const info = media.summarizeProbe(probed, fileInfo)
     if (!info.hasVideo) throw new Error('this file has no video stream; use video_read for audio-only metadata and transcript')
@@ -474,6 +565,7 @@ export function apply(ctx, rawConfig = {}) {
       lines.push(`${String(index + 1).padStart(2, '0')}  ${media.clock(times[index])}  ${entries[index].path}`)
     }
     if (!saved.shown) lines.push('', 'images are not attached on this route; call read_image on each path')
+    for (const note of notes) lines.push(`note: ${note}`)
     return jsonSafe({
       brief: lines.join('\n'),
       images: saved.images,
@@ -492,7 +584,8 @@ export function apply(ctx, rawConfig = {}) {
       throw new Error('screen capture is disabled. Enable it in Settings → 视频阅读器 (Video Reader) → 屏幕捕获.')
     }
     const cwd = await workingDirectory(ctx, exec)
-    const ffmpeg = await findBinary('ffmpeg', settings.ffmpegPath)
+    const captureNotes = []
+    const ffmpeg = await ensureFfmpeg(settings, captureNotes, signal)
     const seconds = args.seconds === undefined ? stored.seconds : clampInt(args.seconds, stored.seconds, 0, 30)
     let fps = args.fps === undefined ? stored.fps : clampInt(args.fps, stored.fps, 1, 30)
     const width = args.width === undefined ? stored.width : clampInt(args.width, stored.width, 320, 3840)
@@ -542,6 +635,7 @@ export function apply(ctx, rawConfig = {}) {
 
     const lines = [`# Screen capture — ${plan.label}`]
     lines.push(`captured: ${seconds > 0 ? `${framePaths.length} frames over ${seconds}s at ${fps} fps` : 'single still'}`)
+    for (const note of captureNotes) lines.push(`note: ${note}`)
     if (budgetNote) lines.push(`note: ${budgetNote}`)
     lines.push(`read rule: every frame must be read — ${saved.shown ? `${batch.length} attached now` : 'none attached (no attachment store)'}${framePaths.length > batch.length ? `, ${framePaths.length - batch.length} remain` : ', none remain'}`)
     lines.push(`manifest: ${manifestPath}`)
@@ -641,7 +735,7 @@ export function apply(ctx, rawConfig = {}) {
     }
 
     const cwd = await workingDirectory(ctx, exec)
-    const ffmpeg = await findBinary('ffmpeg', settings.ffmpegPath)
+    const ffmpeg = await ensureFfmpeg(settings, [], exec.signal)
     const intervalMs = clampInt(args.intervalMs, stored.watchIntervalMs, 500, 60000)
     const threshold = typeof args.threshold === 'number' ? args.threshold : stored.watchThreshold
     const maxMinutes = clampInt(args.maxMinutes, stored.watchMinutes, 1, 240)
@@ -714,7 +808,7 @@ export function apply(ctx, rawConfig = {}) {
     }
 
     const cwd = await workingDirectory(ctx, exec)
-    const ffmpeg = await findBinary('ffmpeg', settings.ffmpegPath)
+    const ffmpeg = await ensureFfmpeg(settings, [], exec.signal)
     const fps = args.fps === undefined ? stored.recordFps : clampInt(args.fps, stored.recordFps, 1, 30)
     const seconds = args.seconds === undefined ? stored.recordSeconds : clampInt(args.seconds, stored.recordSeconds, 10, 7200)
     const maxMB = args.maxMB === undefined ? stored.recordMaxMB : clampInt(args.maxMB, stored.recordMaxMB, 100, 20000)
@@ -865,6 +959,82 @@ export function apply(ctx, rawConfig = {}) {
         return { card: 'generic', title: `Grab stills from ${path.basename(String(args?.path ?? ''))}`, kind: 'read', rawInput: args }
       },
       execute: videoFrames,
+    }))
+
+    disposers.push(ctx.tools.register({
+      name: 'video_reader_setup',
+      description: [
+        'Check or install the external toolchain the video reader needs: ffmpeg + ffprobe, whisper.cpp plus a ggml',
+        'speech model, and the sherpa-onnx diarization runtime plus its two models. That is about 778 MB total;',
+        'everything is downloaded once into %LOCALAPPDATA%\\dsh-video-reader, pinned by version and verified by sha256.',
+        'The video tools install whatever is missing on first use, so call this mainly to inspect what is present,',
+        'pre-install everything before a long session, or retry a download that failed. action:"status" only reads.',
+      ].join(' '),
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['status', 'install'], description: 'status = report what is present; install = download the missing pieces.' },
+          components: {
+            type: 'array',
+            items: { type: 'string', enum: [...COMPONENT_IDS, 'models', 'binaries', 'all'] },
+            description: 'Which pieces to act on; default all. models = speech + diarization models; binaries = ffmpeg + whisper.cpp + sherpa-onnx.',
+          },
+          mirror: { type: 'boolean', description: 'Prefer the gh-proxy mirror for GitHub-hosted downloads (default comes from the settings page).' },
+        },
+        required: ['action'],
+      },
+      output: {
+        schema: {
+          type: 'object',
+          properties: {
+            brief: { type: 'string' },
+            ready: { type: 'boolean' },
+            root: { type: 'string' },
+            components: { type: 'array', items: { type: 'object' } },
+            install: { type: 'object' },
+          },
+        },
+        render(args, value) {
+          return [{ type: 'text', text: value?.brief ?? 'no content' }]
+        },
+      },
+      timeoutMs: 3_600_000,
+      presentCall(args) {
+        return { card: 'generic', title: `Video Reader dependencies — ${args?.action ?? 'status'}`, kind: 'read', rawInput: args }
+      },
+      execute: async (args, exec) => {
+        const action = args?.action === 'install' ? 'install' : 'status'
+        const describe = (status) => {
+          const lines = [
+            `# Video Reader dependencies — ${status.ready ? 'ready' : 'incomplete'} (${status.platform})`,
+            `install root: ${status.root}`,
+          ]
+          for (const entry of status.components) {
+            const mark = entry.ready ? 'ok  ' : 'miss'
+            const detail = entry.ready ? (entry.location ?? 'available') : (entry.reason ?? 'not installed')
+            lines.push(`${mark} ${entry.id.padEnd(19)} ${entry.version ?? ''}  ${detail}`)
+          }
+          lines.push('', `full install is about ${Math.round(status.installedBytes / 1048576)} MB download.`)
+          return lines.join('\n')
+        }
+        if (action === 'status') {
+          const status = await dependencyStatus(settings)
+          return { brief: describe(status), ready: status.ready, root: status.root, components: status.components, install: status.install }
+        }
+        const prefs = await dependencyPrefs(settings)
+        const mirror = args?.mirror === undefined ? prefs.mirror : args.mirror
+        const components = args?.components ?? 'all'
+        const result = await installDependencies({ components, mirror, signal: exec?.signal })
+        const status = await dependencyStatus(settings)
+        const brief = [
+          '# Dependency install finished',
+          `installed: ${result.installed.join(', ')}`,
+          `downloaded: ${Math.round(result.bytes / 1048576)} MB in ${Math.round(result.durationMs / 1000)}s`,
+          '',
+          describe(status),
+        ].join('\n')
+        return { brief, ready: status.ready, root: status.root, components: status.components, install: status.install }
+      },
     }))
 
     disposers.push(ctx.tools.register({
@@ -1110,6 +1280,23 @@ export function apply(ctx, rawConfig = {}) {
           sendJson(res, 200, { windows: await listWindows(0) })
           return
         }
+        if (route === '/deps/status') {
+          sendJson(res, 200, await dependencyStatus(settings))
+          return
+        }
+        if (route === '/deps/install' && req.method === 'POST') {
+          const body = await readBody(req)
+          if (installState().running) {
+            sendJson(res, 202, { started: false, reason: 'already running', state: installState() })
+            return
+          }
+          const prefs = await readSettings()
+          const components = body?.components ?? 'all'
+          const mirror = body?.mirror === undefined ? prefs.dependencyMirror !== false : body.mirror === true
+          void installDependencies({ components, mirror }).catch(() => {})
+          sendJson(res, 202, { started: true, components: expandComponents(components), state: installState() })
+          return
+        }
         if (route === '/watch/status') {
           sendJson(res, 200, { watchers: listWatchers() })
           return
@@ -1211,7 +1398,8 @@ export function apply(ctx, rawConfig = {}) {
       const report = await describeToolchain(settings)
       if (cancelled) return
       if (!report.ffmpeg.ok || !report.ffprobe.ok) {
-        const message = 'video-reader: ffmpeg toolchain unavailable — set ffmpegPath/ffprobePath in the plugin Config. '
+        const message = 'video-reader: ffmpeg toolchain unavailable — it will be installed automatically on first use when autoSetup is on; '
+          + 'otherwise run video_reader_setup {action:"install"}, run scripts/setup.ps1, or set ffmpegPath/ffprobePath in the plugin Config. '
           + `ffmpeg: ${report.ffmpeg.ok ? report.ffmpeg.version : report.ffmpeg.reason} · `
           + `ffprobe: ${report.ffprobe.ok ? report.ffprobe.version : report.ffprobe.reason}`
         const warn = ctx.logger?.warn

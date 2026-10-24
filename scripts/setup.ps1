@@ -1,9 +1,14 @@
 <#
-  Downloads the media binaries and models the plugin needs.
+  Pre-seeds the media binaries and models the plugin needs.
+
+  Since 1.8 this script is optional: the plugin downloads exactly the same
+  pinned files on first use into %LOCALAPPDATA%\dsh-video-reader (checked by
+  sha256, see lib/deps.js). Use this script when you want everything ready
+  before the first call, or when the plugin's installer has no network.
 
   Nothing here is committed to the repository: ffmpeg alone is ~100 MB per
   executable and the speech model is ~514 MB, both beyond GitHub's per-file
-  limit. Run this once after cloning, then restart DSH.
+  limit.
 
   usage:
     pwsh -File scripts/setup.ps1                 # everything, official hosts

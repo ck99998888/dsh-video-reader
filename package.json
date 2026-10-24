@@ -1,9 +1,9 @@
 {
   "name": "@local/dsh-video-reader",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "private": true,
   "type": "module",
-  "description": "Watch video and audio files, and look at the live desktop: visible stills, contact sheets, subtitles, multilingual speaker-labelled transcripts, and screen capture with a settings page.",
+  "description": "Watch video and audio files, and look at the live desktop: visible stills, contact sheets, subtitles, multilingual speaker-labelled transcripts, screen capture, and automatic dependency setup — all local.",
   "icon": "./icon.svg",
   "exports": {
     ".": "./index.js",
